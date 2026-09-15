@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
 // NEW: Added reminder_time to our type definition
 type Task = {
   id: number;
@@ -15,7 +17,7 @@ export default function TaskList() {
 
   const fetchTasks = async () => {
     try {
-      const res = await fetch("http://localhost:5000/tasks");
+      const res = await fetch(`${API_URL}/tasks`);
       if (res.ok) {
         const data = await res.json();
         setTasks(data);

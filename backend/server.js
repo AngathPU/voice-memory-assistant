@@ -1,17 +1,13 @@
 require('dotenv').config();
-const sound = require('sound-play');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const chrono = require('chrono-node');
 const multer = require('multer');
 const fs = require('fs');
-const cron = require('node-cron');
-const notifier = require('node-notifier');
 const db = require('./Database');
 const { OpenAI } = require('openai');
 
-// Fail fast if the API key isn't configured — never fall back to a hardcoded key
 if (!process.env.GROQ_API_KEY) {
   console.error('❌ GROQ_API_KEY is not set. Add it to your .env file.');
   process.exit(1);
@@ -40,10 +36,10 @@ const openai = new OpenAI({
 // POST /transcribe - Process audio with Groq's Whisper
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ error: "No audio file received" });
+    return res.status(400).json({ error: 'No audio file received' });
   }
 
-  console.log("🎙️ Audio file received:", req.file.originalname);
+  console.log('🎙️ Audio file received:', req.file.originalname);
 
   const tempFilePath = req.file.path;
   const ext = path.extname(req.file.originalname) || '.m4a';
@@ -52,121 +48,116 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
     fs.renameSync(tempFilePath, validFilePath);
 
-    // Check if recording is empty or too short (< 1KB)
     const stats = fs.statSync(validFilePath);
     if (stats.size < 1000) {
       if (fs.existsSync(validFilePath)) fs.unlinkSync(validFilePath);
-      return res.status(400).json({ error: "Audio file is too short or empty." });
+      return res.status(400).json({ error: 'Audio file is too short or empty.' });
     }
 
-    console.log(" Sending to Groq Whisper...");
+    console.log('Sending to Groq Whisper...');
 
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(validFilePath),
       model: 'whisper-large-v3',
     });
 
-    console.log("🧠 AI Transcription Success:", transcription.text);
+    console.log('🧠 AI Transcription Success:', transcription.text);
 
-    // Cleanup valid temp file
     if (fs.existsSync(validFilePath)) fs.unlinkSync(validFilePath);
 
     res.json({ transcript: transcription.text });
-
   } catch (error) {
-    console.error("Groq/OpenAI Error:", error);
-
-    // Fallback cleanup
+    console.error('Groq/OpenAI Error:', error);
     if (fs.existsSync(validFilePath)) fs.unlinkSync(validFilePath);
     if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-
-    res.status(500).json({ error: "Transcription failed" });
+    res.status(500).json({ error: 'Transcription failed' });
   }
 });
 
 // GET /tasks - Fetch tasks AND their linked reminders
-app.get('/tasks', (req, res) => {
-  const sql = `
-    SELECT tasks.id, tasks.task, tasks.timestamp, reminders.reminder_time 
-    FROM tasks 
-    LEFT JOIN reminders ON tasks.id = reminders.task_id 
-    ORDER BY tasks.id DESC
-  `;
-  db.all(sql, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+app.get('/tasks', async (req, res) => {
+  try {
+    const result = await db.execute(`
+      SELECT tasks.id, tasks.task, tasks.timestamp, reminders.reminder_time
+      FROM tasks
+      LEFT JOIN reminders ON tasks.id = reminders.task_id
+      ORDER BY tasks.id DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /tasks - Save a new task and extract dates
-app.post('/tasks', (req, res) => {
+app.post('/tasks', async (req, res) => {
   const { task, timestamp } = req.body;
-  if (!task || !timestamp) return res.status(400).json({ error: 'Task and timestamp are required' });
+  if (!task || !timestamp) {
+    return res.status(400).json({ error: 'Task and timestamp are required' });
+  }
 
-  const parsedDate = chrono.parseDate(task);
-  const insertTaskSql = 'INSERT INTO tasks (task, timestamp) VALUES (?, ?)';
-
-  db.run(insertTaskSql, [task, timestamp], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-
-    const taskId = this.lastID;
+  try {
+    const parsedDate = chrono.parseDate(task);
+    const insertResult = await db.execute({
+      sql: 'INSERT INTO tasks (task, timestamp) VALUES (?, ?)',
+      args: [task, timestamp],
+    });
+    const taskId = Number(insertResult.lastInsertRowid);
 
     if (parsedDate) {
       const reminderTime = parsedDate.toISOString();
-      const insertReminderSql = 'INSERT INTO reminders (task_id, reminder_time) VALUES (?, ?)';
-      db.run(insertReminderSql, [taskId, reminderTime], function(remErr) {
-        if (remErr) console.error("Reminder DB Error:", remErr);
-        return res.status(201).json({ id: taskId, task, timestamp, reminder: reminderTime });
-      });
-    } else {
-      return res.status(201).json({ id: taskId, task, timestamp });
-    }
-  });
-});
-
-// --- SCHEDULER ---
-cron.schedule('* * * * *', () => {
-  const now = new Date().toISOString();
-
-  const sql = `
-    SELECT reminders.id as reminder_id, tasks.task, reminders.reminder_time 
-    FROM reminders 
-    JOIN tasks ON reminders.task_id = tasks.id 
-    WHERE reminders.status = 'pending' AND reminders.reminder_time <= ?
-  `;
-
-  db.all(sql, [now], (err, rows) => {
-    if (err) {
-      console.error("Scheduler DB Error:", err.message);
-      return;
-    }
-
-    if (rows && rows.length > 0) {
-      rows.forEach(row => {
-        console.log(`\n🔔 REMINDER DUE: "${row.task}"! (Scheduled for ${row.reminder_time})\n`);
-
-        // 1. Show desktop notification
-        notifier.notify({
-          title: '⏰ Voice Memory Reminder',
-          message: row.task,
-          sound: false,
-          wait: false
+      try {
+        await db.execute({
+          sql: 'INSERT INTO reminders (task_id, reminder_time) VALUES (?, ?)',
+          args: [taskId, reminderTime],
         });
-
-        // 2. Play MP3 if file exists
-        const audioPath = path.join(__dirname, 'alert.mp3');
-        if (fs.existsSync(audioPath)) {
-          sound.play(audioPath).catch(err => console.error("Audio playback error:", err));
-        }
-
-        // Mark as completed
-        db.run(`UPDATE reminders SET status = 'completed' WHERE id = ?`, [row.reminder_id]);
-      });
+      } catch (remErr) {
+        console.error('Reminder DB Error:', remErr.message);
+      }
+      return res.status(201).json({ id: taskId, task, timestamp, reminder: reminderTime });
     }
-  });
+
+    res.status(201).json({ id: taskId, task, timestamp });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Bind to 0.0.0.0 to accept network requests from physical mobile devices
+// GET /reminders/due - Reminders that are pending and due now or earlier.
+// The FRONTEND polls this (instead of the server firing desktop notifications/
+// audio, which only worked when the backend ran on your own machine).
+app.get('/reminders/due', async (req, res) => {
+  const now = new Date().toISOString();
+  try {
+    const result = await db.execute({
+      sql: `
+        SELECT reminders.id as reminder_id, tasks.task, reminders.reminder_time
+        FROM reminders
+        JOIN tasks ON reminders.task_id = tasks.id
+        WHERE reminders.status = 'pending' AND reminders.reminder_time <= ?
+      `,
+      args: [now],
+    });
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /reminders/:id/complete - Mark a reminder as handled once the
+// frontend has shown/played the notification for it.
+app.post('/reminders/:id/complete', async (req, res) => {
+  try {
+    await db.execute({
+      sql: `UPDATE reminders SET status = 'completed' WHERE id = ?`,
+      args: [req.params.id],
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server is running on http://0.0.0.0:${PORT} (Accessible on your local network)`);
+  console.log(`🚀 Server is running on http://0.0.0.0:${PORT}`);
 });

@@ -1,29 +1,38 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { createClient } = require('@libsql/client');
 
-const dbPath = path.resolve(__dirname, 'database.sqlite');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Error opening database', err.message);
-  } else {
-    console.log('Connected to the SQLite database.');
-    
-    // 1. Create Tasks table
-    db.run(`CREATE TABLE IF NOT EXISTS tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task TEXT NOT NULL,
-      timestamp TEXT NOT NULL
-    )`);
+if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
+  console.error(
+    '❌ TURSO_DATABASE_URL and/or TURSO_AUTH_TOKEN are not set. Add them to your .env file.'
+  );
+  process.exit(1);
+}
 
-    // 2. NEW: Create Reminders table linked to Tasks
-    db.run(`CREATE TABLE IF NOT EXISTS reminders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      reminder_time TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
-      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-    )`);
-  }
+const db = createClient({
+  url: process.env.TURSO_DATABASE_URL,
+  authToken: process.env.TURSO_AUTH_TOKEN,
+});
+
+async function init() {
+  await db.execute(`CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    reminder_time TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  )`);
+
+  console.log('Connected to Turso and verified schema.');
+}
+
+init().catch((err) => {
+  console.error('Error initializing Turso database:', err.message);
+  process.exit(1);
 });
 
 module.exports = db;

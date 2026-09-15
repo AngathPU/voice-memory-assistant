@@ -2,6 +2,8 @@
 
 import { useState, useRef } from "react";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
 export default function Dictaphone() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -20,7 +22,7 @@ export default function Dictaphone() {
   const saveTask = async (textToSave: string) => {
     setStatusMessage("Saving to database...");
     try {
-      const response = await fetch("http://localhost:5000/tasks", {
+      const response = await fetch(`${API_URL}/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -48,7 +50,7 @@ export default function Dictaphone() {
     formData.append("audio", audioBlob, "recording.webm");
 
     try {
-      const response = await fetch("http://localhost:5000/transcribe", {
+      const response = await fetch(`${API_URL}/transcribe`, {
         method: "POST",
         body: formData,
       });
