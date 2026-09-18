@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useAuth } from "./AuthContext";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
-// NEW: Added reminder_time to our type definition
 type Task = {
   id: number;
   task: string;
@@ -13,11 +13,15 @@ type Task = {
 };
 
 export default function TaskList() {
+  const { token } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
 
   const fetchTasks = async () => {
+    if (!token) return;
     try {
-      const res = await fetch(`${API_URL}/tasks`);
+      const res = await fetch(`${API_URL}/tasks`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (res.ok) {
         const data = await res.json();
         setTasks(data);
@@ -31,7 +35,7 @@ export default function TaskList() {
     fetchTasks();
     const interval = setInterval(fetchTasks, 3000); 
     return () => clearInterval(interval);
-  }, []);
+  }, [token]);
 
   return (
     <div className="w-full max-w-2xl mt-16 space-y-6">
@@ -53,7 +57,6 @@ export default function TaskList() {
               <div className="flex flex-col">
                 <span className="text-gray-100 text-lg font-medium">{t.task}</span>
                 
-                {/* NEW: Render a reminder badge if a time was detected! */}
                 {t.reminder_time && (
                   <span className="text-sm text-amber-400 flex items-center gap-1 mt-1 font-medium">
                     ⏰ {new Date(t.reminder_time).toLocaleString([], {

@@ -1,9 +1,8 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { useAuth } from './AuthContext';
 
-// Set this in frontend/.env.local as NEXT_PUBLIC_API_URL=http://172.16.0.2:5000
-// (or your deployed backend URL once that's live).
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
 interface DueReminder {
@@ -13,10 +12,10 @@ interface DueReminder {
 }
 
 export default function ReminderNotifier() {
+  const { token } = useAuth();
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    // Ask for notification permission once, on mount.
     if (typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'default') {
         Notification.requestPermission();
@@ -25,48 +24,46 @@ export default function ReminderNotifier() {
   }, []);
 
   useEffect(() => {
+    if (!token) return; // don't poll until logged in
+
     let cancelled = false;
 
     const checkDueReminders = async () => {
       try {
-        const res = await fetch(`${API_URL}/reminders/due`);
+        const res = await fetch(`${API_URL}/reminders/due`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         if (!res.ok) return;
         const due: DueReminder[] = await res.json();
         if (cancelled || due.length === 0) return;
 
         for (const reminder of due) {
-          // Browser notification (requires permission granted above).
           if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('⏰ Voice Memory Reminder', {
               body: reminder.task,
             });
           }
 
-          // Local audio alert — plays on THIS device, unlike the old
-          // server-side sound-play which played on the server's speakers.
-          audioRef.current?.play().catch(() => {
-            // Autoplay can be blocked until the user interacts with the page
-            // at least once — that's expected and not worth surfacing as an error.
-          });
+          audioRef.current?.play().catch(() => {});
 
-          // Tell the backend this reminder has been shown so it won't fire again.
           await fetch(`${API_URL}/reminders/${reminder.reminder_id}/complete`, {
             method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
           });
         }
       } catch {
-        // Silent fail — a missed poll just gets retried next interval.
+        // Silent fail — retried next interval
       }
     };
 
     checkDueReminders();
-    const interval = setInterval(checkDueReminders, 30000); // poll every 30s
+    const interval = setInterval(checkDueReminders, 30000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [token]);
 
   return <audio ref={audioRef} src="/alert.mp3" preload="auto" />;
 }

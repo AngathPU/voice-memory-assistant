@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useAuth } from "./AuthContext";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
 export default function Dictaphone() {
+  const { token } = useAuth();
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -15,7 +17,6 @@ export default function Dictaphone() {
   const animationFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   
-  // NEW: MediaRecorder references
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
@@ -24,7 +25,10 @@ export default function Dictaphone() {
     try {
       const response = await fetch(`${API_URL}/tasks`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           task: textToSave,
           timestamp: new Date().toISOString(),
@@ -42,7 +46,6 @@ export default function Dictaphone() {
     }
   };
 
-  // NEW: Function to send the audio blob to our backend
   const uploadAudioForTranscription = async (audioBlob: Blob) => {
     setStatusMessage("🧠 Processing AI Transcription...");
     
@@ -52,6 +55,7 @@ export default function Dictaphone() {
     try {
       const response = await fetch(`${API_URL}/transcribe`, {
         method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
 
@@ -59,7 +63,6 @@ export default function Dictaphone() {
         const data = await response.json();
         setTranscript(data.transcript);
         
-        // Save the AI transcription to the database
         await saveTask(data.transcript);
       } else {
         setStatusMessage("❌ AI Transcription failed.");
@@ -75,7 +78,6 @@ export default function Dictaphone() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      // 1. Setup Visualizer
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       audioContextRef.current = audioContext;
       const analyser = audioContext.createAnalyser();
@@ -95,7 +97,6 @@ export default function Dictaphone() {
       };
       updateVolume();
 
-      // 2. Setup standard Audio Recorder
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
